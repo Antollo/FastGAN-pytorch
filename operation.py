@@ -7,6 +7,7 @@ from PIL import Image
 from copy import deepcopy
 import shutil
 import json
+from pathlib import Path
 
 def InfiniteSampler(n):
     """Data sampler"""
@@ -81,12 +82,14 @@ class  ImageFolder(Dataset):
 
     def _parse_frame(self):
         frame = []
-        img_names = os.listdir(self.root)
-        img_names.sort()
-        for i in range(len(img_names)):
-            image_path = os.path.join(self.root, img_names[i])
-            if image_path[-4:] == '.jpg' or image_path[-4:] == '.png' or image_path[-5:] == '.jpeg': 
-                frame.append(image_path)
+        valid_extensions = {'.jpg', '.jpeg', '.png'}
+        for root, dirs, files in os.walk(self.root, followlinks=True):
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext in valid_extensions:
+                    full_path = os.path.join(root, file)
+                    frame.append(full_path)
+        frame.sort()
         return frame
 
     def __len__(self):

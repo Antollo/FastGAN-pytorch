@@ -9,6 +9,12 @@ from torchvision import utils as vutils
 import argparse
 import random
 from tqdm import tqdm
+import sys
+import os
+import numpy as np
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'benchmarking'))
+from calc_inception import load_patched_inception_v3
+from fid import calc_fid
 
 from models import weights_init, Discriminator, Generator
 from operation import copy_G_params, load_params, get_dir
@@ -31,6 +37,46 @@ def crop_image_by_part(image, part):
         return image[:,:,hw:,:hw]
     if part==3:
         return image[:,:,hw:,hw:]
+
+@torch.no_grad()
+def compute_real_stats(data_root, im_size, inception, device, n_sample=50000, batch_size=64, num_workers=4):
+    trans = transforms.Compose([
+        transforms.Resize((int(im_size), int(im_size))),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+    ])
+    if 'lmdb' in data_root:
+        from operation import MultiResolutionDataset
+        dataset = MultiResolutionDataset(data_root, trans, 1024)
+    else:
+        dataset = ImageFolder(root=data_root, transform=trans)
+    loader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
+    features = []
+    count = 0
+    for img in tqdm(loader, desc='Extracting real features for FID'):
+        feat = inception(img.to(device))[0].view(img.shape[0], -1)
+        features.append(feat.cpu())
+        count += img.shape[0]
+        if count >= n_sample:
+            break
+    features = torch.cat(features, 0).numpy()
+    return np.mean(features, 0), np.cov(features, rowvar=False)
+
+
+@torch.no_grad()
+def compute_fid_score(netG, nz, inception, device, real_mean, real_cov, n_sample=50000, batch_size=64):
+    features = []
+    for i in tqdm(range(0, n_sample, batch_size), desc='Computing FID50k'):
+        bs = min(batch_size, n_sample - i)
+        noise = torch.randn(bs, nz).to(device)
+        imgs = netG(noise)[0]
+        feat = inception(imgs)[0].view(bs, -1)
+        features.append(feat.cpu())
+    features = torch.cat(features, 0).numpy()
+    sample_mean = np.mean(features, 0)
+    sample_cov = np.cov(features, rowvar=False)
+    return calc_fid(sample_mean, sample_cov, real_mean, real_cov)
+
 
 def train_d(net, data, label="real"):
     """Train function of discriminator"""
@@ -129,7 +175,12 @@ def train(args):
     if multi_gpu:
         netG = nn.DataParallel(netG.to(device))
         netD = nn.DataParallel(netD.to(device))
-    
+
+    inception = load_patched_inception_v3().eval().to(device)
+    print('Computing real dataset statistics for FID...')
+    real_mean, real_cov = compute_real_stats(data_root, im_size, inception, device)
+    print('Real statistics cached.')
+
     for iteration in tqdm(range(current_iteration, total_iterations+1)):
         real_image = next(dataloader)
         real_image = real_image.to(device)
@@ -177,6 +228,8 @@ def train(args):
             backup_para = copy_G_params(netG)
             load_params(netG, avg_param_G)
             torch.save({'g':netG.state_dict(),'d':netD.state_dict()}, saved_model_folder+'/%d.pth'%iteration)
+            fid_score = compute_fid_score(netG, nz, inception, device, real_mean, real_cov)
+            print("FID50k_full at iteration %d: %.4f" % (iteration, fid_score))
             load_params(netG, backup_para)
             torch.save({'g':netG.state_dict(),
                         'd':netD.state_dict(),
