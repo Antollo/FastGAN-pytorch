@@ -1,0 +1,29 @@
+[project]
+name = "fastgan"
+version = "0.1.0"
+requires-python = ">=3.9.0,<3.10.0"
+dependencies = [
+    "torch==2.1.2",
+    "torchvision==0.16.2",
+    "pandas==1.5.3",
+    "numpy==1.23.5",
+    "tqdm==4.64.1",
+    "scipy==1.10.1",
+    "scikit-image==0.21.0",
+    "ipdb==0.13.3",
+    "lmdb==1.4.1",
+    "opencv-python==4.5.4.60",
+    "easing-functions==1.0.4",
+    "lpips<=0.1.4",
+    "kornia<=0.8.2",
+    "pytorch-msssim<=1.0.0",
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu121" }]
+torchvision = [{ index = "pytorch-cu121" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
