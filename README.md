@@ -14,7 +14,7 @@ The code is structured as follows:
 
 * operation.py: the helper functions and data loading methods during training.
 
-* train.py: the main entry of the code, execute this file to train the model, the intermediate results and checkpoints will be automatically saved periodically into a folder "train_results".
+* train.py: the main entry of the code, execute this file to train the model, the intermediate results and checkpoints will be automatically saved periodically into a folder "training-runs".
 
 * eval.py: generates images from a trained generator into a folder, which can be used to calculate FID score.
 
@@ -41,7 +41,7 @@ The code will automatically create a new folder (you have to specify the name of
 
 Once finish training, you can generate 100 images (or as many as you want) by:
 ```
-cd ./train_results/name_of_your_training/
+cd ./training-runs/name_of_your_training/
 python eval.py --n_sample 100 
 ```
 

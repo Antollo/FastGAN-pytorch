@@ -15,6 +15,8 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'benchmarking'))
 from calc_inception import load_patched_inception_v3
 from fid import calc_fid
+from torch.utils.tensorboard import SummaryWriter
+import copy
 
 from models import weights_init, Discriminator, Generator
 from operation import copy_G_params, load_params, get_dir
@@ -114,6 +116,7 @@ def train(args):
     current_iteration = args.start_iter
     save_interval = args.save_interval
     saved_model_folder, saved_image_folder = get_dir(args)
+    writer = SummaryWriter(log_dir=os.path.join(os.path.dirname(saved_model_folder), 'logs'))
 
     
     device = torch.device("cpu")
@@ -155,7 +158,8 @@ def train(args):
     netG.to(device)
     netD.to(device)
 
-    avg_param_G = copy_G_params(netG)
+    #avg_param_G = copy_G_params(netG)
+    netG_ema = copy.deepcopy(netG).eval()
 
     fixed_noise = torch.FloatTensor(8, nz).normal_(0, 1).to(device)
     
@@ -166,7 +170,8 @@ def train(args):
         ckpt = torch.load(checkpoint)
         netG.load_state_dict({k.replace('module.', ''): v for k, v in ckpt['g'].items()})
         netD.load_state_dict({k.replace('module.', ''): v for k, v in ckpt['d'].items()})
-        avg_param_G = ckpt['g_ema']
+        netG_ema.load_state_dict({k.replace('module.', ''): v for k, v in ckpt['g_ema'].items()})
+        #avg_param_G = ckpt['g_ema']
         optimizerG.load_state_dict(ckpt['opt_g'])
         optimizerD.load_state_dict(ckpt['opt_d'])
         current_iteration = int(checkpoint.split('_')[-1].split('.')[0])
@@ -207,33 +212,43 @@ def train(args):
         err_g.backward()
         optimizerG.step()
 
-        for p, avg_p in zip(netG.parameters(), avg_param_G):
-            avg_p.mul_(0.999).add_(0.001 * p.data)
+        #for p, avg_p in zip(netG.parameters(), avg_param_G):
+        #    avg_p.mul_(0.999).add_(0.001 * p.data)
+
+        with torch.no_grad():
+            for p_ema, p in zip(netG_ema.parameters(), netG.parameters()):
+                p_ema.copy_(p.lerp(p_ema, 0.999))
+            for b_ema, b in zip(netG_ema.buffers(), netG.buffers()):
+                b_ema.copy_(b)
 
         if iteration % 100 == 0:
+            kimg = iteration * batch_size / 1000.0
             print("GAN: loss d: %.5f    loss g: %.5f"%(err_dr, -err_g.item()))
+            writer.add_scalar('Loss/D/loss', err_dr, kimg)
+            writer.add_scalar('Loss/G/loss', -err_g.item(), kimg)
           
         if iteration % (save_interval*10) == 0:
-            backup_para = copy_G_params(netG)
-            load_params(netG, avg_param_G)
+            #backup_para = copy_G_params(netG)
+            #load_params(netG, avg_param_G)
             with torch.no_grad():
-                vutils.save_image(netG(fixed_noise)[0].add(1).mul(0.5), saved_image_folder+'/%d.jpg'%iteration, nrow=4)
+                vutils.save_image(netG_ema(fixed_noise)[0].add(1).mul(0.5), saved_image_folder+'/%d.jpg'%iteration, nrow=4)
                 vutils.save_image( torch.cat([
                         F.interpolate(real_image, 128), 
                         rec_img_all, rec_img_small,
                         rec_img_part]).add(1).mul(0.5), saved_image_folder+'/rec_%d.jpg'%iteration )
-            load_params(netG, backup_para)
+            #load_params(netG, backup_para)
 
         if iteration % (save_interval*50) == 0 or iteration == total_iterations:
-            backup_para = copy_G_params(netG)
-            load_params(netG, avg_param_G)
-            torch.save({'g':netG.state_dict(),'d':netD.state_dict()}, saved_model_folder+'/%d.pth'%iteration)
-            fid_score = compute_fid_score(netG, nz, inception, device, real_mean, real_cov)
+            #backup_para = copy_G_params(netG)
+            #load_params(netG, avg_param_G)
+            #torch.save({'g':netG.state_dict(),'d':netD.state_dict()}, saved_model_folder+'/%d.pth'%iteration)
+            fid_score = compute_fid_score(netG_ema, nz, inception, device, real_mean, real_cov)
             print("FID50k_full at iteration %d: %.4f" % (iteration, fid_score))
-            load_params(netG, backup_para)
+            writer.add_scalar('Metrics/fid50k_full', fid_score, iteration * batch_size / 1000.0)
+            #load_params(netG, backup_para)
             torch.save({'g':netG.state_dict(),
                         'd':netD.state_dict(),
-                        'g_ema': avg_param_G,
+                        'g_ema': netG_ema.state_dict(),
                         'opt_g': optimizerG.state_dict(),
                         'opt_d': optimizerD.state_dict()}, saved_model_folder+'/all_%d.pth'%iteration)
 

@@ -466,7 +466,7 @@ if __name__ == "__main__":
     net_ig = RefineGenerator().cuda()
     net_ig = nn.DataParallel(net_ig)
 
-    ckpt = './train_results/trial_refine_ae_as_gan_1024_2/models/4.pth'
+    ckpt = './training-runs/trial_refine_ae_as_gan_1024_2/models/4.pth'
     if ckpt is not None:
         ckpt = torch.load(ckpt)
         #net_ig.load_state_dict(ckpt['ig'])
@@ -477,7 +477,7 @@ if __name__ == "__main__":
     #net_ig.eval()
 
     net_ae = AE()
-    net_ae.load_state_dicts('./train_results/trial_vae_512_1/models/176000.pth')
+    net_ae.load_state_dicts('./training-runs/trial_vae_512_1/models/176000.pth')
     net_ae.cuda()
     net_ae.eval()
 

@@ -14,6 +14,8 @@ dependencies = [
     "lmdb==1.4.1",
     "opencv-python==4.5.4.60",
     "easing-functions==1.0.4",
+    "protobuf==3.18.0",
+    "tensorboard==2.7.0",
     "lpips<=0.1.4",
     "kornia<=0.8.2",
     "pytorch-msssim<=1.0.0",
