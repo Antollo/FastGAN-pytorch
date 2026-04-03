@@ -61,7 +61,7 @@ class NoiseInjection(nn.Module):
     def forward(self, feat, noise=None):
         if noise is None:
             batch, _, height, width = feat.shape
-            noise = torch.randn(batch, 1, height, width).to(feat.device)
+            noise = torch.randn(batch, 1, height, width, device=feat.device)
 
         return feat + self.weight * noise
 

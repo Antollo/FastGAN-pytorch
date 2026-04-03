@@ -25,6 +25,7 @@ from diffaug import DiffAugment
 policy = 'color,translation'
 import lpips
 percept = lpips.PerceptualLoss(model='net-lin', net='vgg', use_gpu=True)
+from sd_loss import SDLoss
 
 
 #torch.backends.cudnn.benchmark = True
@@ -115,6 +116,9 @@ def train(args):
     dataloader_workers = args.workers
     current_iteration = args.start_iter
     save_interval = args.save_interval
+    sd_loss_weight = args.sd_loss
+    sd_aug = args.sd_aug
+    sd_loss_type = args.sd_loss_type
     saved_model_folder, saved_image_folder = get_dir(args)
     writer = SummaryWriter(log_dir=os.path.join(os.path.dirname(saved_model_folder), 'logs'))
 
@@ -162,6 +166,8 @@ def train(args):
     netG_ema = copy.deepcopy(netG).eval()
 
     fixed_noise = torch.FloatTensor(8, nz).normal_(0, 1).to(device)
+
+    sd_loss_fn = SDLoss(device=device, use_aug=sd_aug, loss_type=sd_loss_type)
     
     optimizerG = optim.Adam(netG.parameters(), lr=nlr, betas=(nbeta1, 0.999))
     optimizerD = optim.Adam(netD.parameters(), lr=nlr, betas=(nbeta1, 0.999))
@@ -186,13 +192,19 @@ def train(args):
     real_mean, real_cov = compute_real_stats(data_root, im_size, inception, device)
     print('Real statistics cached.')
 
+    seed_rng = torch.Generator().manual_seed(42)
+
     for iteration in tqdm(range(current_iteration, total_iterations+1)):
         real_image = next(dataloader)
         real_image = real_image.to(device)
         current_batch_size = real_image.size(0)
         noise = torch.Tensor(current_batch_size, nz).normal_(0, 1).to(device)
 
+        noise_seed = torch.randint(0, 2**31, (1,), generator=seed_rng).item()
+        torch.manual_seed(noise_seed)
+
         fake_images = netG(noise)
+        fake_images_temp = fake_images[0]
 
         real_image = DiffAugment(real_image, policy=policy)
         fake_images = [DiffAugment(fake, policy=policy) for fake in fake_images]
@@ -209,7 +221,17 @@ def train(args):
         pred_g = netD(fake_images, "fake")
         err_g = -pred_g.mean()
 
-        err_g.backward()
+        with torch.no_grad():
+            torch.manual_seed(noise_seed)
+            fake_images_ema = netG_ema(noise)[0]
+        err_sd = sd_loss_fn(fake_images_temp, fake_images_ema)
+
+        if sd_loss_weight > 0:
+            err_total = err_g + sd_loss_weight * err_sd
+        else:
+            err_total = err_g
+
+        err_total.backward()
         optimizerG.step()
 
         #for p, avg_p in zip(netG.parameters(), avg_param_G):
@@ -223,9 +245,10 @@ def train(args):
 
         if iteration % 100 == 0:
             kimg = iteration * batch_size / 1000.0
-            print("GAN: loss d: %.5f    loss g: %.5f"%(err_dr, -err_g.item()))
+            print("GAN: loss d: %.5f    loss g: %.5f    loss sd: %.5f"%(err_dr, -err_g.item(), err_sd.item()))
             writer.add_scalar('Loss/D/loss', err_dr, kimg)
             writer.add_scalar('Loss/G/loss', -err_g.item(), kimg)
+            writer.add_scalar('Loss/SD/loss', err_sd.item(), kimg)
           
         if iteration % (save_interval*10) == 0:
             #backup_para = copy_G_params(netG)
@@ -266,6 +289,10 @@ if __name__ == "__main__":
     parser.add_argument('--ckpt', type=str, default='None', help='checkpoint weight path if have one')
     parser.add_argument('--workers', type=int, default=2, help='number of workers for dataloader')
     parser.add_argument('--save_interval', type=int, default=100, help='number of iterations to save model')
+    parser.add_argument('--sd_loss', type=float, default=0.0, help='weight for self-distillation loss (0 = disabled)')
+    parser.add_argument('--sd_aug', action='store_true', default=True, help='use augmentation in SD loss')
+    parser.add_argument('--no_sd_aug', dest='sd_aug', action='store_false', help='disable augmentation in SD loss')
+    parser.add_argument('--sd_loss_type', type=str, default='lpips', choices=['lpips', 'msssim'], help='SD loss type: lpips or msssim')
 
     args = parser.parse_args()
     print(args)
